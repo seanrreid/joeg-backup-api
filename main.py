@@ -1,360 +1,105 @@
 # backend/main.py
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 import os
 from dotenv import load_dotenv
-import openai # type: ignore
+import openai
 from rapidfuzz import process, fuzz
-import json
 import logging
+from db import Base, engine, SessionLocal
+from models import Location, BusinessIdea
+from sqlalchemy.orm import Session
 
 # Load environment variables
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("app.log")
+    ]
+)
 
+# Validate essential environment variables
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
-print(f"OPENAI_API_KEY is set: {bool(OPENAI_API_KEY)}")
-print(f"GOOGLE_MAPS_API_KEY is set: {bool(GOOGLE_MAPS_API_KEY)}")
+if not OPENAI_API_KEY:
+    logging.error("OPENAI_API_KEY is not set.")
+    raise ValueError("OPENAI_API_KEY environment variable is missing.")
+
+if not GOOGLE_MAPS_API_KEY:
+    logging.error("GOOGLE_MAPS_API_KEY is not set.")
+    raise ValueError("GOOGLE_MAPS_API_KEY environment variable is missing.")
+
+if not DATABASE_URL:
+    logging.error("DATABASE_URL is not set.")
+    raise ValueError("DATABASE_URL environment variable is missing.")
+
+openai.api_key = OPENAI_API_KEY
+
+Base.metadata.create_all(bind=engine)
+
+logging.info(f"OPENAI_API_KEY is set: {bool(OPENAI_API_KEY)}")
+logging.info(f"GOOGLE_MAPS_API_KEY is set: {bool(GOOGLE_MAPS_API_KEY)}")
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Update this to your frontend's URL in production
+    allow_origins=[
+        "http://localhost:3000",  # Frontend development URL
+        "http://127.0.0.1:3000",  # Another possible frontend URL
+    ],  # Replace with actual URL
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-openai.api_key = OPENAI_API_KEY
+def seed_database():
+    db = SessionLocal()
+    try:
+        # Seed locations
+        known_locations = ["New York, NY", "Los Angeles, CA", "Chicago, IL"]
+        for loc in known_locations:
+            if not db.query(Location).filter_by(name=loc).first():
+                db.add(Location(name=loc))
 
-KNOWN_LOCATIONS = [
-    "New York, NY",
-    "Los Angeles, CA",
-    "Chicago, IL",
-    "Houston, TX",
-    "Phoenix, AZ",
-    "Philadelphia, PA",
-    "San Antonio, TX",
-    "San Diego, CA",
-    "Dallas, TX",
-    "San Jose, CA",
-    "Greenville, SC",
-    "Miami, FL",
-    "Atlanta, GA",
-    "Spartanburg, SC",
-    "Charlotte, NC",
-    "Anderson, SC",
-    "Columbia, SC",
-    "Charleston, SC",
-    "Asheville, NC",
-    "Easley, SC",
-    "Hendersonville, NC",
-    "Simpsonville, SC",
-    "Greer, SC",
-    "Seneca, SC",
-    "Greenwood, SC",
-    "Taylors, SC",
-    "Mauldin, SC",
-    "Travelers Rest, SC",
-    "Piedmont, SC",
-    "Fountain Inn, SC",
-    "Laurens, SC",
-    "Clinton, SC",
-    "Berea, SC",
-    "Williamston, SC",
-    "Central, SC",
-    "Liberty, SC",
-    "Pickens, SC",
-    "Six Mile, SC",
-    "Clemson, SC",
-    "Pendleton, SC",
-    
-]
+        # Seed business ideas
+        known_business_ideas = ["Coffee Shop", "Book Store", "Gym"]
+        for idea in known_business_ideas:
+            if not db.query(BusinessIdea).filter_by(name=idea).first():
+                db.add(BusinessIdea(name=idea))
 
-KNOWN_BUSINESS_IDEAS = [
-    "Accounting",
-    "Advertising",
-    "Agriculture",
-    "Architectural",
-    "Automotive",
-    "Banking",
-    "Beauty",
-    "Biotechnology",
-    "Business",
-    "Construction",
-    "Consulting",
-    "Cosmetics",
-    "Design",
-    "Education",
-    "Energy",
-    "Engineering",
-    "Entertainment",
-    "Fashion",
-    "Finance",
-    "Food",
-    "Health",
-    "Hospitality",
-    "Insurance",
-    "Legal",
-    "Manufacturing",
-    "Marketing",
-    "Media",
-    "Medical",
-    "Music",
-    "Nonprofit",
-    "Pharmaceutical",
-    "Photography",
-    "Real Estate",
-    "Retail",
-    "Sports",
-    "Technology",
-    "Telecommunications",
-    "Transportation",
-    "Travel",
-    "Utilities",
-    "Web Design",
-    "Web Development",
-    "Writing",
-    "Coffee Shop",
-    "Restaurant",
-    "Bar",
-    "Brewery",
-    "Cafe",
-    "Food Truck",
-    "Bakery",
-    "Catering",
-    "Grocery Store",
-    "Food Delivery",
-    "Gym",
-    "Yoga Studio",
-    "Fitness Center",
-    "Personal Training",
-    "Physical Therapy",
-    "Florist",
-    "Landscaping",
-    "Gardening",
-    "Lawn Care",
-    "Pool Cleaning",
-    "Pest Control",
-    "Cleaning",
-    "Home Staging",
-    "Interior Design",
-    "Home Renovation",
-    "Home Inspection",
-    "Real Estate Agent",
-    "Property Management",
-    "Mortgage Broker",
-    "Insurance Agent",
-    "Financial Planner",
-    "Accountant",
-    "Lawyer",
-    "Legal Services",
-    "Consultant",
-    "Marketing Agency",
-    "Advertising Agency",
-    "Public Relations",
-    "Event Planning",
-    "Graphic Design",
-    "Web Design",
-    "Web Development",
-    "Photographer",
-    "Videographer",
-    "Musician",
-    "Band",
-    "DJ",
-    "Music Producer",
-    "Music Teacher",
-    "Music Lessons",
-    "Music Studio",
-    "Logistics",
-    "Delivery",
-    "Moving",
-    "Storage",
-    "Courier",
-    "Transportation",
-    "Rideshare",
-    "Taxi",
-    "Car Service",
-    "Limo Service",
-    "Bus Service",
-    "Train Service",
-    "Airline",
-    "Travel Agent",
-    "Travel Agency",
-    "Tour Guide",
-    "Tour Operator",
-    "Tourism",
-    "Hotel",
-    "Motel",
-    "Bed and Breakfast",
-    "Vacation Rental",
-    "Hostel",
-    "Resort",
-    "Campground",
-    "Ski Resort",
-    "Theme Park",
-    "Amusement Park",
-    "Water Park",
-    "Zoo",
-    "Aquarium",
-    "Museum",
-    "Art Gallery",
-    "Historical Site",
-    "National Park",
-    "State Park",
-    "City Park",
-    "Botanical Garden",
-    "Nature Preserve",
-    "Wildlife Sanctuary",
-    "Nature Center",
-    "Planetarium",
-    "Observatory",
-    "Science Museum",
-    "Children's Museum",
-    "Natural History Museum",
-    "History Museum",
-    "Art Museum",
-    "Art Studio",
-    "Art School",
-    "Art Class",
-    "Art Workshop",
-    "Art Camp",
-    "Art Gallery",
-    "Art Exhibit",
-    "Art Show",
-    "Art Fair",
-    "Art Festival",
-    "Art Walk",
-    "Art Tour",
-    "Antiques",
-    "Collectibles",
-    "Vintage",
-    "Thrift",
-    "Secondhand",
-    "Artisan",
-    "Handmade",
-    "Craft",
-    "DIY",
-    "Homemade",
-    "Local",
-    "Small Business",
-    "Startup",
-    "Entrepreneur",
-    "Freelancer",
-    "Independent Contractor",
-    "Self-Employed",
-    "Work From Home",
-    "Home-Based Business",
-    "Online Business",
-    "E-Commerce",
-    "Internet Business",
-    "Digital Business",
-    "Mobile Business",
-    "Social Media",
-    "Content Marketing",
-    "Email Marketing",
-    "Search Engine Optimization",
-    "Pay-Per-Click Advertising",
-    "Affiliate Marketing",
-    "Influencer Marketing",
-    "Video Marketing",
-    "Podcast Marketing",
-    "Asset Management",
-    "Investment Management",
-    "Wealth Management",
-    "Financial Planning",
-    "Retirement Planning",
-    "Estate Planning",
-    "Tax Planning",
-    "Insurance Planning",
-    "Risk Management",
-    "Portfolio Management",
-    "Ice Cream Shop",
-    "Frozen Yogurt Shop",
-    "Gelato Shop",
-    "Sorbet Shop",
-    "Popsicle Shop",
-    "Ice Cream Truck",
-    "Ice Cream Cart",
-    "Ice Cream Stand",
-    "Ice Cream Parlor",
-    "Ice Cream Cafe",
-    "Mexican Restaurant",
-    "Italian Restaurant",
-    "Chinese Restaurant",
-    "Japanese Restaurant",
-    "Thai Restaurant",
-    "Indian Restaurant",
-    "Korean Restaurant",
-    "Vietnamese Restaurant",
-    "Greek Restaurant",
-    "Mediterranean Restaurant",
-    "Middle Eastern Restaurant",
-    "American Restaurant",
-    "Burger Restaurant",
-    "Pizza Restaurant",
-    "Sandwich Restaurant",
-    "Sub Restaurant",
-    "Salad Restaurant",
-    "Soup Restaurant",
-    "Seafood Restaurant",
-    "Steakhouse",
-    "Barbecue Restaurant",
-    "Breakfast Restaurant",
-    "Brunch Restaurant",
-    "Lunch Restaurant",
-    "Dinner Restaurant",
-    "Fine Dining Restaurant",
-    "Casual Dining Restaurant",
-    "Fast Food Restaurant",
-    "Family Restaurant",
-    "Chain Restaurant",
-    "Franchise Restaurant",
-    "Local Restaurant",
-    "Independent Restaurant",
-    "Mom and Pop Restaurant",
-    "Hole-in-the-Wall Restaurant",
-    "Dive Restaurant",
-    "Cafe Restaurant",
-    "Bistro Restaurant",
-    "Brasserie Restaurant",
-    "Gastropub Restaurant",
-    "Cafe",
-    "Coffee Shop",
-    "Espresso Bar",
-    "Tea House",
-    "Bakery",
-    "Pastry Shop",
-    "Dessert Shop",
-    "Ice Cream Shop",
-    "Juice Bar",
-    "Smoothie Bar",
-    "Bubble Tea Shop",
-    "Milkshake Bar",
-    "Donut Shop",
-    "Bagel Shop",
-    "Sandwich Shop",
-    "Salad Bar",
-    "Soup Kitchen",
-    "Food Truck",
-    "Mobile Cafe",
-    "Mobile Coffee Shop",
-    "Mobile Bakery",
-    "Mobile Dessert Shop",
-    "Mobile Juice Bar",
-    "Mobile Smoothie Bar",
-    "Mobile Bubble Tea Shop",
+        db.commit()
+        logging.info("Database seeding completed.")
+    except Exception as e:
+        logging.error(f"Error seeding database: {str(e)}", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
 
-]
+def get_known_locations(db: Session):
+    locations = db.query(Location.name).all()
+    return [loc[0] for loc in locations]
+
+def get_known_business_ideas(db: Session):
+    ideas = db.query(BusinessIdea.name).all()
+    return [idea[0] for idea in ideas]
+
 def correct_input(user_input, known_list, threshold=80):
     match, score, _ = process.extractOne(
         user_input, known_list, scorer=fuzz.WRatio
@@ -368,44 +113,50 @@ class EvaluationRequest(BaseModel):
     business_idea: str
     location: str
 
+@app.on_event("startup")
+def startup_event():
+    seed_database()
+
 @app.post("/evaluate")
-async def evaluate(request: EvaluationRequest):
-    print(f"Received request - Business Idea: {request.business_idea}, Location: {request.location}")
-    logging.info("Received request at /evaluate endpoint.")
-    business_idea = request.business_idea
-    location = request.location
-
-    # Step 1: Fuzzy match and correct the location
-    corrected_location = correct_input(location, KNOWN_LOCATIONS, threshold=80)
-    print(f"Location correction: {location} -> {corrected_location}")
-    
-    logging.info(f"Corrected Location: {corrected_location}")
-    if not corrected_location:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Location '{location}' not recognized. Available locations: {', '.join(KNOWN_LOCATIONS[:5])}..."
-        )
-
-    # Step 2: Fuzzy match and correct the business idea
-    corrected_business_idea = correct_input(business_idea, KNOWN_BUSINESS_IDEAS, threshold=80)
-    print(f"Business idea correction: {business_idea} -> {corrected_business_idea}")
-    
-    if not corrected_business_idea:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Business idea '{business_idea}' not recognized. Available ideas: {', '.join(KNOWN_BUSINESS_IDEAS[:5])}..."
-        )
-
+async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
     try:
+        logging.info(f"Received request - Business Idea: {request.business_idea}, Location: {request.location}")
+
+        KNOWN_LOCATIONS = get_known_locations(db)
+        KNOWN_BUSINESS_IDEAS = get_known_business_ideas(db)
+
+        business_idea = request.business_idea
+        location = request.location
+
+        # Step 1: Fuzzy match and correct the location
+        corrected_location = correct_input(location, KNOWN_LOCATIONS, threshold=80)
+        logging.info(f"Location correction: {location} -> {corrected_location}")
+
+        if not corrected_location:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Location '{location}' not recognized. Available locations: {', '.join(KNOWN_LOCATIONS[:5])}..."
+            )
+
+        # Step 2: Fuzzy match and correct the business idea
+        corrected_business_idea = correct_input(business_idea, KNOWN_BUSINESS_IDEAS, threshold=80)
+        logging.info(f"Business idea correction: {business_idea} -> {corrected_business_idea}")
+
+        if not corrected_business_idea:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Business idea '{business_idea}' not recognized. Available ideas: {', '.join(KNOWN_BUSINESS_IDEAS[:5])}..."
+            )
+
+        # Step 3: Geocode the corrected location to get latitude and longitude
         geocode_url = f"https://maps.googleapis.com/maps/api/geocode/json?address={corrected_location}&key={GOOGLE_MAPS_API_KEY}"
-        print(f"Attempting geocoding for location: {corrected_location}")
-        
+        logging.info(f"Attempting geocoding for location: {corrected_location}")
+
         geocode_response = requests.get(geocode_url)
         geocode_data = geocode_response.json()
-        
-        print(f"Geocoding response status: {geocode_data['status']}")
+
         if geocode_data['status'] != 'OK':
-            print(f"Geocoding error response: {geocode_data}")
+            logging.error(f"Geocoding failed: {geocode_data}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Geocoding failed: {geocode_data['status']} - Please check if Google Maps API key is configured properly"
@@ -413,80 +164,67 @@ async def evaluate(request: EvaluationRequest):
 
         lat = geocode_data['results'][0]['geometry']['location']['lat']
         lng = geocode_data['results'][0]['geometry']['location']['lng']
-        print(f"Successfully geocoded to: {lat}, {lng}")
+        logging.info(f"Successfully geocoded to: {lat}, {lng}")
 
-    except requests.RequestException as e:
-        print(f"Request error during geocoding: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Geocoding request failed: {str(e)}")
-    except KeyError as e:
-        print(f"Unexpected geocoding response format: {geocode_data}")
-        raise HTTPException(status_code=500, detail="Invalid response from geocoding service")
-    except Exception as e:
-        print(f"Unexpected error during geocoding: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Geocoding error: {str(e)}")
+        # Step 4: Use Places API to find nearby competitors
+        places_url = f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={lat},{lng}&radius=1500&type=establishment&keyword={corrected_business_idea}&key={GOOGLE_MAPS_API_KEY}"
+        logging.info(f"Fetching competitors with URL: {places_url}")
 
-    # Rest of your code remains the same...
+        places_response = requests.get(places_url)
+        places_data = places_response.json()
 
-    # Step 3: Geocode the corrected location to get latitude and longitude
-    geocode_url = f"https://maps.googleapis.com/maps/api/geocode/json?address={corrected_location}&key={GOOGLE_MAPS_API_KEY}"
-    geocode_response = requests.get(geocode_url)
-    geocode_data = geocode_response.json()
+        competitors = []
+        if places_data['status'] == 'OK':
+            for place in places_data['results']:
+                competitors.append({
+                    'name': place.get('name'),
+                    'rating': place.get('rating'),
+                    'user_ratings_total': place.get('user_ratings_total'),
+                    'vicinity': place.get('vicinity')
+                })
+        else:
+            logging.warning(f"No competitors found or Places API error: {places_data['status']}")
 
-    if geocode_data['status'] != 'OK':
-        raise HTTPException(status_code=400, detail='Invalid location provided after correction.')
+        # Step 5: Prepare data for OpenAI
+        if competitors:
+            competitors_list = "\n".join([
+                f"{c['name']} (Rating: {c['rating']}, Reviews: {c['user_ratings_total']}) - {c['vicinity']}" 
+                for c in competitors
+            ])
+        else:
+            competitors_list = "No competitors found in the vicinity."
 
-    lat = geocode_data['results'][0]['geometry']['location']['lat']
-    lng = geocode_data['results'][0]['geometry']['location']['lng']
+        prompt = f"""
+        Analyze the viability of the following business idea in {corrected_location}.
 
-    # Step 4: Use Places API to find nearby competitors
-    places_url = f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={lat},{lng}&radius=1500&type=establishment&keyword={corrected_business_idea}&key={GOOGLE_MAPS_API_KEY}"
-    places_response = requests.get(places_url)
-    places_data = places_response.json()
+        Business Idea: {corrected_business_idea}
 
-    competitors = []
-    if places_data['status'] == 'OK':
-        for place in places_data['results']:
-            competitors.append({
-                'name': place.get('name'),
-                'rating': place.get('rating'),
-                'user_ratings_total': place.get('user_ratings_total'),
-                'vicinity': place.get('vicinity')
-            })
+        Nearby Competitors:
+        {competitors_list}
 
-    # Step 5: Prepare data for OpenAI
-    if competitors:
-        competitors_list = "\n".join([f"{c['name']} (Rating: {c['rating']}, Reviews: {c['user_ratings_total']}) - {c['vicinity']}" for c in competitors])
-    else:
-        competitors_list = "No competitors found in the vicinity."
+        Provide an assessment rating it as 'Great', 'Okay', or 'Bad' and explain the reasoning.
+        """
 
-    prompt = f"""
-    Analyze the viability of the following business idea in {corrected_location}.
+        logging.info("Sending prompt to OpenAI for assessment.")
 
-    Business Idea: {corrected_business_idea}
-
-    Nearby Competitors:
-    {competitors_list}
-
-    Provide an assessment rating it as 'Great', 'Okay', or 'Bad' and explain the reasoning.
-    """
-
-    try:
-        openai_response = openai.Completion.create(
-            engine="gpt-3.5-turbo-instruct",
-            prompt=prompt,
+        openai_response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a business viability analyst."},
+                {"role": "user", "content": prompt}
+            ],
             max_tokens=300,
             temperature=0.3
         )
-        
 
-        assessment = openai_response.choices[0].text.strip()
-        finish_reason = openai_response.choices[0].get('finish_reason')
+        assessment = openai_response.choices[0].message['content'].strip()
+        finish_reason = openai_response.choices[0].finish_reason
         logging.info(f"OpenAI finish reason: {finish_reason}")
         logging.info(f"Assessment: {assessment}")
-        
+
         if finish_reason == 'length':
             logging.warning("OpenAI response was truncated due to max_tokens limit.")
-        
+
         # Simple parsing to find 'Great', 'Okay', 'Bad'
         rating = 'Unknown'
         if 'Great' in assessment:
@@ -506,12 +244,44 @@ async def evaluate(request: EvaluationRequest):
         logging.info("Successfully processed the request.")
         return response
 
-
     except HTTPException:
         raise
+    except requests.RequestException as e:
+        logging.error(f"Request error during API call: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Bad Gateway: External API request failed.")
+    except KeyError as e:
+        logging.error(f"Key error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal Server Error: Unexpected response format.")
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+        logging.error(f"Unhandled exception: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal Server Error.")
+
+class LocationCreate(BaseModel):
+    name: str
+
+class BusinessIdeaCreate(BaseModel):
+    name: str
+
+@app.post("/locations")
+def create_location(location: LocationCreate, db: Session = Depends(get_db)):
+    if db.query(Location).filter_by(name=location.name).first():
+        raise HTTPException(status_code=400, detail="Location already exists.")
+    new_location = Location(name=location.name)
+    db.add(new_location)
+    db.commit()
+    db.refresh(new_location)
+    return new_location
+
+@app.post("/business-ideas")
+def create_business_idea(business_idea: BusinessIdeaCreate, db: Session = Depends(get_db)):
+    if db.query(BusinessIdea).filter_by(name=business_idea.name).first():
+        raise HTTPException(status_code=400, detail="Business idea already exists.")
+    new_idea = BusinessIdea(name=business_idea.name)
+    db.add(new_idea)
+    db.commit()
+    db.refresh(new_idea)
+    return new_idea
+
 
 if __name__ == '__main__':
     import uvicorn
