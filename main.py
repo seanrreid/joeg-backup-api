@@ -1,5 +1,3 @@
-# main.py
-
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
@@ -19,7 +17,6 @@ from utils.financials import (
     estimate_startup_costs,
     estimate_operational_expenses,
     generate_p_and_l_statement,
-    
 )
 from utils.risks import (
     identify_potential_risks,
@@ -40,7 +37,7 @@ API_NINJAS_KEY = os.getenv("API_NINJAS_KEY")
 
 print("GOOGLE_MAPS_API_KEY:", GOOGLE_MAPS_API_KEY)
 print("DATABASE_URL:", DATABASE_URL)
-print("APININJAS_API_KEY:", API_NINJAS_KEY)
+print("API_NINJAS_API_KEY:", API_NINJAS_KEY)
 
 # Configure logging
 logging.basicConfig(
@@ -50,10 +47,6 @@ logging.basicConfig(
 )
 
 # Validate essential environment variables
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-
 if not GOOGLE_MAPS_API_KEY:
     logging.error("GOOGLE_MAPS_API_KEY is not set.")
     raise ValueError("GOOGLE_MAPS_API_KEY environment variable is missing.")
@@ -62,23 +55,21 @@ if not DATABASE_URL:
     logging.error("DATABASE_URL is not set.")
     raise ValueError("DATABASE_URL environment variable is missing.")
 
-
 Base.metadata.create_all(bind=engine)
 
 logging.info(f"GOOGLE_MAPS_API_KEY is set: {bool(GOOGLE_MAPS_API_KEY)}")
 logging.info(f"DATABASE_URL is set: {bool(DATABASE_URL)}")
-logging.info(f"APININJAS_API_KEY is set: {bool(API_NINJAS_KEY)}")
+logging.info(f"API_NINJAS_API_KEY is set: {bool(API_NINJAS_KEY)}")
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # For development; restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 def get_db():
     db = SessionLocal()
@@ -86,7 +77,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 
 def seed_database():
     db = SessionLocal()
@@ -111,16 +101,13 @@ def seed_database():
     finally:
         db.close()
 
-
 def get_known_locations(db: Session):
     locations = db.query(Location.name).all()
     return [loc[0] for loc in locations]
 
-
 def get_known_business_ideas(db: Session):
     ideas = db.query(BusinessIdea.name).all()
     return [idea[0] for idea in ideas]
-
 
 def correct_input(user_input, known_list, threshold=80):
     match, score, _ = process.extractOne(user_input, known_list, scorer=fuzz.WRatio)
@@ -128,7 +115,6 @@ def correct_input(user_input, known_list, threshold=80):
         return match
     else:
         return None
-
 
 # Define Pydantic models
 
@@ -140,6 +126,11 @@ class FinancialProjection(BaseModel):
     net_profit: float
     break_even_revenue: float
 
+class Competitor(BaseModel):
+    name: str
+    rating: float
+    user_ratings_total: int
+    vicinity: str
 
 class RiskAssessment(BaseModel):
     risk: str
@@ -147,11 +138,9 @@ class RiskAssessment(BaseModel):
     impact: int
     risk_score: int
 
-
 class EvaluationRequest(BaseModel):
     business_idea: str
     location: str
-
 
 class EvaluationResponse(BaseModel):
     rating: str
@@ -167,19 +156,15 @@ class EvaluationResponse(BaseModel):
     risks: Optional[List[RiskAssessment]] = []
     mitigation_strategies: Optional[List[str]] = []
 
-
 class LocationCreate(BaseModel):
     name: str
-
 
 class BusinessIdeaCreate(BaseModel):
     name: str
 
-
 @app.on_event("startup")
 def startup_event():
     seed_database()
-
 
 @app.post("/evaluate", response_model=EvaluationResponse)
 async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
@@ -404,7 +389,6 @@ async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
         logging.error(f"Unhandled exception: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error.")
 
-
 @app.post("/locations")
 def create_location(location: LocationCreate, db: Session = Depends(get_db)):
     if db.query(Location).filter_by(name=location.name).first():
@@ -414,7 +398,6 @@ def create_location(location: LocationCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_location)
     return new_location
-
 
 @app.post("/business-ideas")
 def create_business_idea(
@@ -439,18 +422,15 @@ def list_routes():
             })
     return routes
 
-
 @app.get("/locations")
 def get_locations(db: Session = Depends(get_db)):
     locations = db.query(Location).all()
     return [loc.name for loc in locations]
 
-
 @app.get("/business-ideas")
 def get_business_ideas(db: Session = Depends(get_db)):
     ideas = db.query(BusinessIdea).all()
     return [idea.name for idea in ideas]
-
 
 if __name__ == "__main__":
     import uvicorn

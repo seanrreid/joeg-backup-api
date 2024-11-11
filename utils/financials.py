@@ -1,4 +1,3 @@
-# financials.py
 from utils.data_fetching import (
     get_population_data,
     get_average_spending,

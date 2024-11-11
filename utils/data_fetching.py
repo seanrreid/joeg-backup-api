@@ -1,5 +1,3 @@
-# utils/data_fetching.py
-
 import requests
 import os
 from dotenv import load_dotenv
@@ -78,5 +76,3 @@ def get_industry_interest_rate(industry):
         # Add more industries
     }
     return interest_rates.get(industry, 0.3)  # Default value
-
-# Add any other data fetching functions required by your application
