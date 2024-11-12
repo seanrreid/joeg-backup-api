@@ -1,9 +1,10 @@
+# main.py
+from pydantic import BaseModel
+from utils.config import settings
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
-from pydantic import BaseModel
 import requests
-import os
 from dotenv import load_dotenv
 import logging
 from db import Base, engine, SessionLocal
@@ -11,7 +12,6 @@ from models import Location, BusinessIdea, Evaluation
 from sqlalchemy.orm import Session
 from ml.model import model
 from utils.external_api import get_google_trends, get_economic_indicator
-from utils.data_fetching import get_population_data
 from utils.financials import (
     estimate_annual_revenue,
     estimate_startup_costs,
@@ -26,15 +26,21 @@ from utils.risks import (
 import pandas as pd
 from typing import List, Optional
 from rapidfuzz import process, fuzz
+from pytrends.exceptions import TooManyRequestsError
+from pathlib import Path
+
 
 # Load environment variables
-load_dotenv()
+dotenv_path = Path(__file__).parent / '.env'
+
+load_dotenv(dotenv_path)
 
 # Validate essential environment variables
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
-DATABASE_URL = os.getenv("DATABASE_URL")
-API_NINJAS_KEY = os.getenv("API_NINJAS_KEY")
+GOOGLE_MAPS_API_KEY = settings.google_maps_api_key
+DATABASE_URL = settings.database_url
+API_NINJAS_KEY = settings.api_ninjas_key
 
+# Remove or comment out print statements in production
 print("GOOGLE_MAPS_API_KEY:", GOOGLE_MAPS_API_KEY)
 print("DATABASE_URL:", DATABASE_URL)
 print("API_NINJAS_API_KEY:", API_NINJAS_KEY)
@@ -165,6 +171,7 @@ class BusinessIdeaCreate(BaseModel):
 @app.on_event("startup")
 def startup_event():
     seed_database()
+    seed_database()
 
 @app.post("/evaluate", response_model=EvaluationResponse)
 async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
@@ -172,6 +179,9 @@ async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
         logging.info(
             f"Received request - Business Idea: {request.business_idea}, Location: {request.location}"
         )
+
+        # Fetch external data for enhanced evaluation
+        trend_score = get_google_trends(request.business_idea, request.location)
 
         business_idea = request.business_idea
         location = request.location
@@ -189,6 +199,7 @@ async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
             logging.info(f"Attempting geocoding for new location: {location}")
             try:
                 geocode_response = requests.get(geocode_url, timeout=10)
+                geocode_response.raise_for_status()
                 geocode_data = geocode_response.json()
             except requests.exceptions.RequestException as e:
                 logging.error(f"Geocoding API request failed: {e}")
@@ -237,6 +248,7 @@ async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
         logging.info(f"Attempting geocoding for location: {corrected_location}")
         try:
             geocode_response = requests.get(geocode_url, timeout=10)
+            geocode_response.raise_for_status()
             geocode_data = geocode_response.json()
         except requests.exceptions.RequestException as e:
             logging.error(f"Geocoding API request failed: {e}")
@@ -257,6 +269,7 @@ async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
         logging.info(f"Fetching competitors with URL: {places_url}")
         try:
             places_response = requests.get(places_url, timeout=10)
+            places_response.raise_for_status()
             places_data = places_response.json()
         except requests.exceptions.RequestException as e:
             logging.error(f"Places API request failed: {e}")
@@ -279,7 +292,6 @@ async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
             )
 
         # Step 5: Fetch external data for enhanced evaluation
-        trend_score = get_google_trends(corrected_business_idea, corrected_location)
         economic_indicator = get_economic_indicator(corrected_location)
 
         # Step 6: Prepare features for the ML model
@@ -373,6 +385,12 @@ async def evaluate(request: EvaluationRequest, db: Session = Depends(get_db)):
         logging.info("Successfully processed the request.")
         return response
 
+    except TooManyRequestsError as e:
+        logging.error(f"Too many requests to Google Trends API: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Service Unavailable: Too many requests to the Google Trends API. Please try again later."
+        )
     except HTTPException:
         raise
     except requests.RequestException as e:

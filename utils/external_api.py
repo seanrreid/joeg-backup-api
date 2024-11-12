@@ -1,8 +1,13 @@
 # backend/utils/external_api.py
 from pytrends.request import TrendReq
 import os
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_random, wait_exponential, retry_if_exception_type
+import logging
+
+logger = logging.getLogger(__name__)
 
 pytrends = TrendReq(hl='en-US', tz=360)
+
 
 def get_google_trends(business_idea, location):
     kw_list = [business_idea]
