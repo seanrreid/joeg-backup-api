@@ -4,14 +4,19 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+fastapi = "*"
+uvicorn = "*"
+sqlmodel = "*"
+alembic = "*"
+psycopg = "*"
 flask = "*"
 requests = "*"
 python-dotenv = "*"
 flask-cors = "*"
-openai = "*"
+flask-wtf = "*"
 rapidfuzz = "*"
-fastapi = "*"
-uvicorn = "*"
+sqlalchemy = "*"
+openai = "*"
 pydantic = "*"
 
 [dev-packages]

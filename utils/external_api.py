@@ -1,37 +1,44 @@
 # backend/utils/external_api.py
-from pytrends.request import TrendReq
-import os
-from tenacity import retry, stop_after_attempt, wait_fixed, wait_random, wait_exponential, retry_if_exception_type
+
 import logging
+import requests
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-pytrends = TrendReq(hl='en-US', tz=360)
+API_KEY = "EXPLODING_TOPICS_API_KEY"  # Ideally, load this from environment variables
 
-
-def get_google_trends(business_idea, location):
-    kw_list = [business_idea]
-    pytrends.build_payload(kw_list, geo=location_to_geo(location), timeframe='today 12-m')
-    trends = pytrends.interest_over_time()
-    if trends.empty:
-        return 0
-    return trends[business_idea].mean()
-
-def location_to_geo(location):
-    # Simplified: Map location to country code or regional code for Google Trends
-    location_mapping = {
-        'New York, NY': 'US-NY',
-        'Los Angeles, CA': 'US-CA',
-        'Chicago, IL': 'US-IL',
-        'Houston, TX': 'US-TX',
-        'San Francisco, CA': 'US-CA'
-        # Add more mappings as needed
+def fetch_trend_data(topic: str, region: Optional[str] = None) -> Dict[str, Any]:
+   
+    base_url = "https://api.explodingtopics.com/v1/topics"  # Hypothetical endpoint
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
     }
-    return location_mapping.get(location, 'US')  # Default to US
+    params = {
+        "query": topic,
+        "region": region if region else "global"
+    }
 
-# backend/utils/external_api.py (continued)
-def get_economic_indicator(location):
-    # Placeholder: In a real scenario, fetch from an API like World Bank or local government data
+    try:
+        response = requests.get(base_url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        logger.info(f"Successfully fetched trend data for topic: {topic}")
+        return data
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error occurred while fetching trend data: {http_err}")
+    except Exception as err:
+        logger.error(f"An error occurred while fetching trend data: {err}")
+    return {}
+    
+
+
+def get_economic_indicator(location: str) -> float:
+    """
+    Fetches economic indicators for a given location.
+    Placeholder implementation; replace with actual API calls as needed.
+    """
     economic_data = {
         'New York, NY': 0.8,
         'Los Angeles, CA': 0.75,
@@ -41,3 +48,7 @@ def get_economic_indicator(location):
         # Add more mappings as needed
     }
     return economic_data.get(location, 0.5)  # Default to 0.5
+
+
+
+ 

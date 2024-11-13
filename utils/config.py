@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     google_cloud_secret: str = Field(..., env='GOOGLE_CLOUD_SECRET')
     openai_api_key: str = Field(..., env='OPENAI_API_KEY')
     database_url: str = Field(..., env='DATABASE_URL')
-    census_api_key: str = Field(..., env='CENSUS_API_KEY')
     api_ninjas_key: str = Field(..., env='API_NINJAS_KEY')
+    exploding_topics_api_key: str = Field(..., env='EXPLODING_TOPICS_API_KEY')
 
     class Config:
         env_file = ".env"

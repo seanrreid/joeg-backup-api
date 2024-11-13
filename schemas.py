@@ -28,7 +28,6 @@ class EvaluationResponse(BaseModel):
     corrected_business_idea: str
     new_location_added: bool
     new_business_idea_added: bool
-    trend_score: float
     economic_indicator: float
     financial_projection: Optional[FinancialProjection] = None
     risks: Optional[List[RiskAssessment]] = []
